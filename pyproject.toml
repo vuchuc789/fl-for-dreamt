@@ -16,6 +16,8 @@ license = "Apache-2.0"
 dependencies = [
     "flwr[simulation]>=1.22.0",
     "torch==2.8.0",
+    "pandas==2.3.2",
+    "matplotlib==3.10.6",
 ]
 
 [tool.hatch.build.targets.wheel]
