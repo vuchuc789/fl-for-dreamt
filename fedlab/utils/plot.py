@@ -44,3 +44,36 @@ class LivePlot:
     def show(self):
         plt.ioff()
         plt.show()
+
+
+def plot_signals(df):
+    signals = ["BVP", "ACC_X", "ACC_Y", "ACC_Z", "TEMP", "EDA", "HR", "IBI"]
+
+    # pick colors per label
+    label_colors = {
+        lbl: color
+        for lbl, color in zip(
+            df["Sleep_Stage"].unique(),
+            plt.cm.tab10.colors[: df["Sleep_Stage"].nunique()],
+        )
+    }
+
+    fig, axes = plt.subplots(len(signals), 1, figsize=(15, 12), sharex=True)
+
+    for ax, sig in zip(axes, signals):
+        for lbl, color in label_colors.items():
+            sub_df = df[df["Sleep_Stage"] == lbl]
+            ax.plot(
+                sub_df["TIMESTAMP"],
+                sub_df[sig],
+                color=color,
+                linewidth=0.7,
+                alpha=0.8,
+                label=f"Stage {lbl}",
+            )
+        ax.set_ylabel(sig)
+
+    axes[-1].set_xlabel("Timestamp")
+    axes[0].legend(loc="upper right", ncol=len(label_colors))
+    plt.tight_layout()
+    plt.show()

@@ -5,6 +5,7 @@ from urllib.parse import urljoin
 
 import pandas as pd
 import requests
+from torch.utils.data import Dataset
 from tqdm import tqdm
 
 
@@ -22,9 +23,10 @@ def download(filename: str):
     password = os.getenv("DREAMT_PASSWORD")
 
     if not username or not password:
-        raise RuntimeError(
+        print(
             "Export DREAMT_USERNAME and DREAMT_PASSWORD as the credentials of physionet.org"
         )
+        return
 
     remote_dir = "https://physionet.org/files/dreamt/2.1.0/"
     remote_path = urljoin(remote_dir, filename)
@@ -57,16 +59,12 @@ def download(filename: str):
 def preprocess(filename: str, fs_in: int, fs_out: int, win_size: int):
     dir_path = "data/dreamt/"
     src_path = os.path.join(dir_path, filename)
-    dst_path = src_path.replace(".csv", f"_{fs_out}Hz.csv")
-
-    if os.path.exists(dst_path):
-        print(f"Skipping {filename}, already exists")
-        return
+    dst_path = src_path.replace(".csv", "_preprocessed.csv")
 
     os.makedirs("/".join(src_path.split("/")[:-1]), exist_ok=True)
 
     n_in = fs_in * win_size
-    n_out = 1000000 // fs_out
+    n_out = 1000000 // fs_out  # microseconds step for resample
 
     chunk_size = n_in * 100
     reader = pd.read_csv(src_path, chunksize=chunk_size)
@@ -75,32 +73,56 @@ def preprocess(filename: str, fs_in: int, fs_out: int, win_size: int):
         header_written = False
 
         for chunk in reader:
-            chunk = chunk[
-                [
-                    "TIMESTAMP",
-                    "BVP",
-                    "ACC_X",
-                    "ACC_Y",
-                    "ACC_Z",
-                    "TEMP",
-                    "EDA",
-                    "HR",
-                    "IBI",
-                    "Sleep_Stage",
-                ]
-            ]
+            # keep only required columns
+            chunk.drop(
+                columns=[
+                    c
+                    for c in chunk.columns
+                    if c
+                    not in [
+                        "TIMESTAMP",
+                        "BVP",
+                        "ACC_X",
+                        "ACC_Y",
+                        "ACC_Z",
+                        "TEMP",
+                        "EDA",
+                        "HR",
+                        "IBI",
+                        "Sleep_Stage",
+                    ]
+                ],
+                inplace=True,
+            )
 
+            # TIMESTAMP → timedelta index
             chunk["TIMESTAMP"] = pd.to_timedelta(chunk["TIMESTAMP"], unit="s")
             chunk = chunk.set_index("TIMESTAMP")
 
+            # assign window IDs
             chunk["Window_Id"] = (chunk.index.total_seconds() // win_size).astype(int)
 
-            chunk = chunk.groupby("Window_Id").filter(
-                lambda g: len(g) == n_in
-                and g["Sleep_Stage"].nunique() == 1
-                and g.notna().all().all()
-            )
+            # filter + majority rule
+            def valid_window(g):
+                if len(g) != n_in or g.isna().any().any():
+                    return False
+                counts = g["Sleep_Stage"].value_counts()
+                majority_frac = counts.iloc[0] / len(g)
+                return majority_frac >= 0.8
 
+            filtered = []
+            for _, g in chunk.groupby("Window_Id"):
+                if valid_window(g):
+                    # force label = majority label
+                    majority_label = g["Sleep_Stage"].mode().iloc[0]
+                    g["Sleep_Stage"] = majority_label
+                    filtered.append(g)
+
+            if not filtered:
+                continue
+            chunk = pd.concat(filtered)
+
+            # resample if needed
             if fs_out < fs_in:
                 chunk = chunk.resample(f"{n_out}us").agg(
                     {
@@ -116,12 +138,19 @@ def preprocess(filename: str, fs_in: int, fs_out: int, win_size: int):
                     }
                 )
 
-            chunk.drop("Window_Id", errors="ignore")
+            chunk.drop(columns=["Window_Id"], errors="ignore", inplace=True)
+            chunk.reset_index(inplace=True)
+            chunk["TIMESTAMP"] = chunk["TIMESTAMP"].dt.total_seconds()
 
+            # save chunk
             chunk.to_csv(f_out, index=False, header=not header_written)
             header_written = True
 
     print(f"{filename} done!")
+
+
+class DREAMTDataset(Dataset):
+    pass
 
 
 def load_data():
@@ -138,13 +167,46 @@ if __name__ == "__main__":
 
     def task(filename: str):
         download(filename)
-        preprocess(filename, 64, 16, 30)
+        preprocess(filename, 64, 4, 30)
 
     with ThreadPoolExecutor(numOfWorkers) as executor:
         features = {executor.submit(task, f): f for f in filenames}
         wait(features)
 
-    df = pd.read_csv("data/dreamt/data_64Hz/S002_whole_df.csv")
-    print(df.info())
-    df = pd.read_csv("data/dreamt/data_64Hz/S002_whole_df_16Hz.csv")
-    print(df.info())
+    # df = pd.read_csv("data/dreamt/data_64Hz/S002_whole_df_preprocessed.csv")
+    # print(df.info())
+    #
+    # signals = ["BVP", "ACC_X", "ACC_Y", "ACC_Z", "TEMP", "EDA", "HR", "IBI"]
+    #
+    # fig, axes = plt.subplots(len(signals), 1, figsize=(12, 8), sharex=True)
+    #
+    # # color map for labels
+    # label_colors = {
+    #     lbl: col for lbl, col in zip(df["Sleep_Stage"].unique(), plt.cm.tab10.colors)
+    # }
+    #
+    # for i, sig in enumerate(signals):
+    #     ax = axes[i]
+    #     for lbl, color in label_colors.items():
+    #         sub_df = df[df["Sleep_Stage"] == lbl]
+    #         ax.scatter(
+    #             sub_df["TIMESTAMP"],
+    #             sub_df[sig],
+    #             color=color,
+    #             s=0.1,
+    #             alpha=0.7,
+    #             label=f"Label {lbl}" if i == 0 else "",
+    #         )
+    #     ax.set_ylabel(sig)
+    #
+    # axes[0].legend(
+    #     loc="upper center",  # place legend above plots
+    #     bbox_to_anchor=(0.5, 1.7),  # (x, y) relative to axes: 0.5 = center, 1.7 = above
+    #     ncol=len(label_colors),  # all labels in one row
+    #     frameon=True,
+    #     markerscale=10,
+    # )
+    # plt.xlabel("Time (s)")
+    # plt.suptitle("Signals over Time", fontsize=16)
+    # plt.tight_layout(rect=[0, 0, 1, 0.97])
+    # plt.show()
