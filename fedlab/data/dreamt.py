@@ -158,7 +158,7 @@ def load_data():
 
 
 if __name__ == "__main__":
-    numOfParticipants = 1
+    numOfParticipants = 20
     numOfWorkers = cpu_count() // 2
 
     filenames = [
