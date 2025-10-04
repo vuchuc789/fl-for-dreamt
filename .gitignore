@@ -164,5 +164,6 @@ cython_debug/
 
 data/har.zip
 data/dreamt/data_64Hz/*_whole_df.csv
+data/dreamt/data_100Hz/*_PSG_df_updated.csv
 model/**
 !model/.gitkeep
