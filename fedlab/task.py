@@ -21,14 +21,14 @@ def train(
     trainloader: DataLoader,
     epochs: int,
     lr: float,
-    rr: float,
+    weight_decay: float,
     device: Device,
     testloader: DataLoader = None,
     plot: bool = False,
 ):
     net.to(device)
     criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(net.parameters(), lr=lr, weight_decay=rr)
+    optimizer = torch.optim.Adam(net.parameters(), lr=lr, weight_decay=weight_decay)
 
     if plot:
         plotter = LivePlot()
@@ -170,7 +170,7 @@ if __name__ == "__main__":
         trainloader=trainloader,
         epochs=50,
         lr=1e-4,
-        rr=1e-6,
+        weight_decay=1e-6,
         device=device,
         testloader=valloader,
         plot=True,

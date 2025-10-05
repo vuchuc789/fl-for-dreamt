@@ -18,6 +18,7 @@ dependencies = [
     "torch==2.8.0",
     "pandas==2.3.2",
     "matplotlib==3.10.6",
+    "tqdm==4.67.1",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -33,10 +34,12 @@ clientapp = "fedlab.client_app:app"
 
 # Custom config values accessible via `context.run_config`
 [tool.flwr.app.config]
-num-server-rounds = 3
+num-server-rounds = 100
 fraction-train = 0.5
+fraction-evaluate = 1
 local-epochs = 1
-lr = 0.01
+lr = 1e-4
+weight-decay = 0
 
 # Default federation to use when running the app
 [tool.flwr.federations]

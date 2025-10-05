@@ -13,21 +13,31 @@ app = ServerApp()
 def main(grid: Grid, context: Context) -> None:
     # Read run config
     fraction_train: float = context.run_config["fraction-train"]
+    fraction_evaluate: float = context.run_config["fraction-evaluate"]
     num_rounds: int = context.run_config["num-server-rounds"]
     lr: float = context.run_config["lr"]
+    weight_decay: float = context.run_config["weight-decay"]
 
     # Load global model
     global_model = Net()
     arrays = ArrayRecord(global_model.state_dict())
 
     # Initialize FedAvg strategy
-    strategy = FedAvg(fraction_train=fraction_train)
+    strategy = FedAvg(
+        fraction_train=fraction_train,
+        fraction_evaluate=fraction_evaluate,
+    )
 
     # Start strategy, run FedAvg for `num_rounds`
     result = strategy.start(
         grid=grid,
         initial_arrays=arrays,
-        train_config=ConfigRecord({"lr": lr}),
+        train_config=ConfigRecord(
+            {
+                "lr": lr,
+                "weight_decay": weight_decay,
+            }
+        ),
         num_rounds=num_rounds,
     )
 

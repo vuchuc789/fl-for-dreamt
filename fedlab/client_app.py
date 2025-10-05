@@ -33,7 +33,7 @@ def train(msg: Message, context: Context):
         trainloader=trainloader,
         epochs=context.run_config["local-epochs"],
         lr=msg.content["config"]["lr"],
-        rr=1e-6,
+        weight_decay=msg.content["config"]["weight_decay"],
         device=device,
     )
 
