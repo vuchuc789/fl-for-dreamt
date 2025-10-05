@@ -11,8 +11,8 @@ from torch import nn
 from torch.types import Device
 from torch.utils.data import DataLoader
 
-from fedlab.data.har import load_data
-from fedlab.model.har.gru import Net
+from fedlab.data.dreamt import load_data
+from fedlab.model.dreamt.gru import Net
 from fedlab.utils.plot import LivePlot
 
 
@@ -64,7 +64,6 @@ def train(
                     epoch + 1,
                     train_loss=train_loss,
                     test_loss=metrics["loss"],
-                    accuracy=metrics["accuracy"],
                 )
         else:
             if plot:
@@ -164,14 +163,14 @@ if __name__ == "__main__":
     model = Net()
     model.to(device)
 
-    trainloader, valloader = load_data(batch_size=32)
+    trainloader, valloader = load_data(3, batch_size=32)
 
     train(
         net=model,
         trainloader=trainloader,
-        epochs=10,
-        lr=1e-3,
-        rr=1e-5,
+        epochs=50,
+        lr=1e-4,
+        rr=1e-6,
         device=device,
         testloader=valloader,
         plot=True,

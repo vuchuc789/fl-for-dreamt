@@ -1,15 +1,20 @@
 import os
 from concurrent.futures import ThreadPoolExecutor, wait
 from datetime import datetime
-from multiprocessing import cpu_count
 from urllib.parse import urljoin
 
 import matplotlib.pyplot as plt
 import pandas as pd
 import requests
 from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import LabelEncoder, StandardScaler
+from torch import from_numpy
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
+
+FREQUENCY_IN = 64  # Hz
+FREQUENCY_OUT = 4  # Hz
+WINDOW_SIZE = 30  # s
 
 
 def download(filename: str):
@@ -147,15 +152,16 @@ def preprocess(filename: str, fs_in: int, fs_out: int, win_size: int):
                 chunk["Sleep_Stage"] = chunk["Window_Id"].map(labels)
                 update += (original_labels != chunk["Sleep_Stage"]).sum()
 
-                # Resample
-                chunk = chunk.resample(f"{n_out}us").agg(
-                    {
-                        col: "mean"
-                        for col in chunk.columns
-                        if col not in ["Sleep_Stage", "Window_Id"]
-                    }
-                    | {"Sleep_Stage": "first"}
-                )
+                # Resample if needed
+                if fs_out < fs_in:
+                    chunk = chunk.resample(f"{n_out}us").agg(
+                        {
+                            col: "mean"
+                            for col in chunk.columns
+                            if col not in ["Sleep_Stage", "Window_Id"]
+                        }
+                        | {"Sleep_Stage": "first"}
+                    )
                 sample += len(chunk)
 
                 # Save
@@ -181,27 +187,81 @@ def preprocess(filename: str, fs_in: int, fs_out: int, win_size: int):
 
 
 class DREAMTDataset(Dataset):
-    def __init__(self, participant: int) -> None:
+    def __init__(
+        self,
+        participant: int,
+        test=False,
+        transform=None,
+        target_transform=None,
+    ):
         df = pd.read_csv(
-            f"data/dreamt/data_64Hz/S{participant + 2:03d}_whole_df_preprocessed.csv"
+            f"data/dreamt/data_100Hz/S{participant + 2:03d}_PSG_df_updated.csv"
+            if FREQUENCY_IN == 100
+            else f"data/dreamt/data_64Hz/S{participant + 2:03d}_whole_df_preprocessed.csv"
         )
         df.drop(columns=["TIMESTAMP"], inplace=True)
-        X = df.drop(columns=["Sleep_Stage"])
-        y = df["Sleep_Stage"]
 
+        X = df.drop(columns=["Sleep_Stage"]).to_numpy()
+        y = df[["Sleep_Stage"]].to_numpy()
+
+        feat_num = X.shape[1]
+        win_size = WINDOW_SIZE * FREQUENCY_OUT  # number of time steps per window
+
+        n = len(X) - len(X) % win_size  # to trim unfitted time steps
+        X = X[:n].reshape(-1, win_size, feat_num)  # (win_num, win_size, feat_num)
+        y = y[:n].reshape(-1, win_size)[:, 0]  # all same per window
+
+        # split by windows not steps
         X_train, X_test, y_train, y_test = train_test_split(
             X, y, test_size=0.2, random_state=42
         )
 
+        scaler = StandardScaler()
+        X_train_flat = X_train.reshape(-1, feat_num)  # (win_num * win_size, feat_num)
+        scaler.fit(X_train_flat)
+
+        X_flat = (X_test if test else X_train).reshape(
+            -1, feat_num
+        )  # (win_num * win_size, feat_num)
+
+        X_scaled = scaler.transform(X_flat)
+        X_scaled = X_scaled.reshape(
+            -1, win_size, feat_num
+        )  # (win_num, win_size, feat_num)
+
+        self.X = X_scaled.astype("float32")
+        self.y = (
+            LabelEncoder()
+            .fit(["P", "W", "N1", "N2", "N3", "R"])
+            .transform(y_test if test else y_train)
+        )
+
+        self.transform = transform
+        self.target_transform = target_transform
+
+    def __len__(self):
+        return len(self.y)
+
+    def __getitem__(self, idx):
+        X = self.X[idx]  # (win_size, feat_num) or (seq, feature)
+        y = self.y[idx]
+
+        if self.transform:
+            X = self.transform(X)
+        if self.target_transform:
+            y = self.target_transform(y)
+
+        return X, y
+
 
 def load_data(participant: int, batch_size: int = 32):
     trainloader = DataLoader(
-        DREAMTDataset(participant),
+        DREAMTDataset(participant, test=False, transform=from_numpy),
         batch_size=batch_size,
         shuffle=True,
     )
     testloader = DataLoader(
-        DREAMTDataset(participant),
+        DREAMTDataset(participant, test=True, transform=from_numpy),
         batch_size=batch_size,
         shuffle=False,
     )
@@ -210,24 +270,39 @@ def load_data(participant: int, batch_size: int = 32):
 
 
 if __name__ == "__main__":
+    # load_data(0)
+    # rnn = nn.GRU(8, 128, 1, batch_first=True)
+    # fc = nn.Linear(128, 6)
+    # for input, _ in load_data(0)[0]:
+    #     output, h_n = rnn(input)
+    #     out = fc(h_n[-1])
+    #     print(input.shape)
+    #     print(output.shape)
+    #     print(h_n.shape)
+    #     print(out.shape)
+    #     break
+
     numOfParticipants = 4
-    numOfWorkers = cpu_count() // 2
+    numOfWorkers = os.cpu_count() // 2
 
     filenames = [
-        f"data_64Hz/S{i:03d}_whole_df.csv"
-        # f"data_100Hz/S{i:03d}_PSG_df_updated.csv"
+        (
+            f"data_100Hz/S{i:03d}_PSG_df_updated.csv"
+            if FREQUENCY_IN == 100
+            else f"data_64Hz/S{i:03d}_whole_df.csv"
+        )
         for i in range(2, numOfParticipants + 2)
     ]
 
     def task(filename: str):
         download(filename)
-        preprocess(filename, 64, 4, 30)
+        preprocess(filename, FREQUENCY_IN, FREQUENCY_OUT, WINDOW_SIZE)
 
     with ThreadPoolExecutor(numOfWorkers) as executor:
         features = {executor.submit(task, f): f for f in filenames}
         wait(features)
 
-    df = pd.read_csv("data/dreamt/data_64Hz/S004_whole_df_preprocessed.csv")
+    df = pd.read_csv("data/dreamt/data_64Hz/S005_whole_df_preprocessed.csv")
     print(df.info())
 
     signals = ["BVP", "ACC_X", "ACC_Y", "ACC_Z", "TEMP", "EDA", "HR", "IBI"]

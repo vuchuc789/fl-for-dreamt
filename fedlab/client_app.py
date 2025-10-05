@@ -1,5 +1,3 @@
-"""fedlab: A Flower / PyTorch app."""
-
 import torch
 from flwr.app import ArrayRecord, Context, Message, MetricRecord, RecordDict
 from flwr.clientapp import ClientApp
@@ -14,32 +12,34 @@ app = ClientApp()
 
 @app.train()
 def train(msg: Message, context: Context):
-    """Train the model on local data."""
-
     # Load the model and initialize it with the received weights
     model = Net()
     model.load_state_dict(msg.content["arrays"].to_torch_state_dict())
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    device = torch.device(
+        torch.accelerator.current_accelerator().type
+        if torch.accelerator.is_available()
+        else "cpu"
+    )
     model.to(device)
 
     # Load the data
     partition_id = context.node_config["partition-id"]
-    num_partitions = context.node_config["num-partitions"]
-    trainloader, _ = load_data(partition_id, num_partitions)
+    # num_partitions = context.node_config["num-partitions"]
+    trainloader, _ = load_data(partition_id, batch_size=32)
 
     # Call the training function
-    train_loss = train_fn(
-        model,
-        trainloader,
-        context.run_config["local-epochs"],
-        msg.content["config"]["lr"],
-        device,
+    metrics = train_fn(
+        net=model,
+        trainloader=trainloader,
+        epochs=context.run_config["local-epochs"],
+        lr=msg.content["config"]["lr"],
+        rr=1e-6,
+        device=device,
     )
 
     # Construct and return reply Message
     model_record = ArrayRecord(model.state_dict())
-    metrics = {
-        "train_loss": train_loss,
+    metrics |= {
         "num-examples": len(trainloader.dataset),
     }
     metric_record = MetricRecord(metrics)
@@ -49,30 +49,30 @@ def train(msg: Message, context: Context):
 
 @app.evaluate()
 def evaluate(msg: Message, context: Context):
-    """Evaluate the model on local data."""
-
     # Load the model and initialize it with the received weights
     model = Net()
     model.load_state_dict(msg.content["arrays"].to_torch_state_dict())
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    device = torch.device(
+        torch.accelerator.current_accelerator().type
+        if torch.accelerator.is_available()
+        else "cpu"
+    )
     model.to(device)
 
     # Load the data
     partition_id = context.node_config["partition-id"]
-    num_partitions = context.node_config["num-partitions"]
-    _, valloader = load_data(partition_id, num_partitions)
+    # num_partitions = context.node_config["num-partitions"]
+    _, valloader = load_data(partition_id, batch_size=32)
 
     # Call the evaluation function
-    eval_loss, eval_acc = test_fn(
-        model,
-        valloader,
-        device,
+    metrics = test_fn(
+        net=model,
+        testloader=valloader,
+        device=device,
     )
 
     # Construct and return reply Message
-    metrics = {
-        "eval_loss": eval_loss,
-        "eval_acc": eval_acc,
+    metrics |= {
         "num-examples": len(valloader.dataset),
     }
     metric_record = MetricRecord(metrics)

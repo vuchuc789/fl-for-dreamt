@@ -8,18 +8,16 @@ class LivePlot:
         self.epochs = []
         self.train_losses = []
         self.test_losses = []
-        self.accuracies = []
 
         (self.train_line,) = self.ax.plot([], [], label="Train Loss")
         (self.test_line,) = self.ax.plot([], [], label="Test Loss")
-        (self.acc_line,) = self.ax.plot([], [], label="Accuracy")
 
         self.ax.set_xlabel("Epoch")
-        self.ax.set_ylabel("Loss / Accuracy")
+        self.ax.set_ylabel("Loss")
         self.ax.legend()
         self.ax.grid(True)
 
-    def update(self, epoch, train_loss, test_loss=None, accuracy=None):
+    def update(self, epoch, train_loss, test_loss=None):
         self.epochs.append(epoch)
         self.train_losses.append(train_loss)
         self.train_line.set_data(self.epochs, self.train_losses)
@@ -27,10 +25,6 @@ class LivePlot:
         if test_loss is not None:
             self.test_losses.append(test_loss)
             self.test_line.set_data(self.epochs, self.test_losses)
-
-        if accuracy is not None:
-            self.accuracies.append(accuracy)
-            self.acc_line.set_data(self.epochs, self.accuracies)
 
         # Rescale axes dynamically
         self.ax.relim()
