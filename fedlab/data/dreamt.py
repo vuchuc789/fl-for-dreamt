@@ -282,7 +282,7 @@ if __name__ == "__main__":
     #     print(out.shape)
     #     break
 
-    numOfParticipants = 4
+    numOfParticipants = 20
     numOfWorkers = os.cpu_count() // 2
 
     filenames = [

@@ -168,7 +168,7 @@ if __name__ == "__main__":
     train(
         net=model,
         trainloader=trainloader,
-        epochs=50,
+        epochs=30,
         lr=1e-4,
         weight_decay=1e-6,
         device=device,

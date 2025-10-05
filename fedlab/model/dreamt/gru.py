@@ -8,16 +8,19 @@ class Net(nn.Module):
         self.gru = nn.GRU(
             input_size=input_size,
             hidden_size=hidden_size,
-            num_layers=1,
+            num_layers=2,
             batch_first=True,
-            # dropout=0.3,
+            dropout=0.3,
         )
 
-        self.fc = nn.Linear(hidden_size, n_classes)
+        self.dropout = nn.Dropout(0.3)
+        self.fc1 = nn.Linear(hidden_size, 64)
+        self.fc2 = nn.Linear(64, n_classes)
 
     def forward(self, x):
         # x: (batch, win_size, feat_num)
         _, h_n = self.gru(x)  # h_n: (num_layers, batch, hidden_size)
-        last = h_n[-1]  # (batch, hidden_size) – last layer's hidden state
-        out = self.fc(last)  # (batch, num_classes)
+        last_hidden = h_n[-1]  # (batch, hidden_size) – last layer's hidden state
+        out = self.fc1(self.dropout(last_hidden))
+        out = self.fc2(self.dropout(out))
         return out
