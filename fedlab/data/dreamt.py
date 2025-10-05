@@ -86,7 +86,7 @@ def preprocess(filename: str, fs_in: int, fs_out: int, win_size: int):
 
     n_in = fs_in * win_size
     n_out = 1000000 // fs_out  # microseconds step for resample
-    chunk_size = n_in * 100
+    chunk_size = n_in * 50
 
     total = remain = update = sample = 0
     start_time = datetime.now()
@@ -302,7 +302,7 @@ if __name__ == "__main__":
         features = {executor.submit(task, f): f for f in filenames}
         wait(features)
 
-    df = pd.read_csv("data/dreamt/data_64Hz/S005_whole_df_preprocessed.csv")
+    df = pd.read_csv("data/dreamt/data_64Hz/S002_whole_df_preprocessed.csv")
     print(df.info())
 
     signals = ["BVP", "ACC_X", "ACC_Y", "ACC_Z", "TEMP", "EDA", "HR", "IBI"]

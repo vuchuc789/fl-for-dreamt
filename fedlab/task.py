@@ -64,6 +64,7 @@ def train(
                     epoch + 1,
                     train_loss=train_loss,
                     test_loss=metrics["loss"],
+                    accuracy=metrics["accuracy"],
                 )
         else:
             if plot:
@@ -163,12 +164,12 @@ if __name__ == "__main__":
     model = Net()
     model.to(device)
 
-    trainloader, valloader = load_data(3, batch_size=32)
+    trainloader, valloader = load_data(0, batch_size=32)
 
     train(
         net=model,
         trainloader=trainloader,
-        epochs=30,
+        epochs=50,
         lr=1e-4,
         weight_decay=1e-6,
         device=device,
