@@ -13,6 +13,7 @@ from torch.utils.data import DataLoader
 
 from fedlab.data.dreamt import load_data
 from fedlab.model.dreamt.gru import Net
+from fedlab.utils.model import load_checkpoint, save_history, save_model
 from fedlab.utils.plot import LivePlot
 
 
@@ -24,16 +25,32 @@ def train(
     weight_decay: float,
     device: Device,
     testloader: DataLoader = None,
-    plot: bool = False,
+    checkpoint: int = 0,
 ):
     net.to(device)
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(net.parameters(), lr=lr, weight_decay=weight_decay)
 
-    if plot:
-        plotter = LivePlot()
+    if testloader:
+        checkpoint, history = load_checkpoint(
+            net,
+            optimizer,
+            checkpoint,
+        )
+        plotter = (
+            LivePlot(
+                epochs=history["round"],
+                train_losses=history["train_loss"],
+                test_losses=history["test_loss"],
+                accuracies=history["accuracy"],
+            )
+            if history
+            else LivePlot()
+        )
 
-    for epoch in range(epochs):
+    epochs += checkpoint
+
+    for epoch in range(checkpoint + 1, epochs + 1):
         net.train()
         train_loss = 0.0
         for X, y in trainloader:
@@ -47,37 +64,33 @@ def train(
 
         train_loss = train_loss / len(trainloader)
 
-        if testloader is not None:
-            print(f"Epoch {epoch + 1}/{epochs} | Train Loss: {train_loss:.4f}", end="")
+        if testloader:
+            save_model(epoch, model=model, optimizer=optimizer)
 
             metrics = test(net, testloader, device)
+            save_history(epoch, metrics={"train_loss": train_loss} | metrics)
+
             print(
-                f" | Test Loss: {metrics['loss']:.4f}, "
+                f"Epoch {epoch}/{epochs} | Train Loss: {train_loss:.4f}"
+                f" | Test Loss: {metrics['test_loss']:.4f}, "
                 f"Acc: {metrics['accuracy']:.4f}, "
                 f"Prec: {metrics['precision']:.4f}, "
                 f"Rec: {metrics['recall']:.4f}, "
                 f"F1: {metrics['f1']:.4f}, "
                 f"AUC: {metrics['auc']:.4f}"
             )
-            if plot:
-                plotter.update(
-                    epoch + 1,
-                    train_loss=train_loss,
-                    test_loss=metrics["loss"],
-                    accuracy=metrics["accuracy"],
-                )
-        else:
-            if plot:
-                plotter.update(
-                    epoch + 1,
-                    train_loss=train_loss,
-                )
+            plotter.update(
+                epoch,
+                train_loss=train_loss,
+                test_loss=metrics["test_loss"],
+                accuracy=metrics["accuracy"],
+            )
 
-    if plot:
+    if testloader:
         plotter.show()
 
     return {
-        "loss": train_loss,
+        "train_loss": train_loss,
     }
 
 
@@ -144,7 +157,7 @@ def test(
         auc = 0.0  # if not computable
 
     return {
-        "loss": loss,
+        "test_loss": loss,
         "accuracy": accuracy,
         "precision": precision,
         "recall": recall,
@@ -169,10 +182,10 @@ if __name__ == "__main__":
     train(
         net=model,
         trainloader=trainloader,
-        epochs=50,
+        epochs=5,
         lr=1e-4,
         weight_decay=1e-6,
         device=device,
         testloader=valloader,
-        plot=True,
+        checkpoint=3,
     )

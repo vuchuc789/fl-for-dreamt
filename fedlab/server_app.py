@@ -5,6 +5,11 @@ from flwr.serverapp.strategy import FedAvg
 
 from fedlab.task import Net
 
+
+class CustomStrategy(FedAvg):
+    pass
+
+
 # Create ServerApp
 app = ServerApp()
 
