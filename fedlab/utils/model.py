@@ -1,4 +1,5 @@
 import os
+from typing import OrderedDict
 
 import pandas as pd
 import torch
@@ -7,22 +8,25 @@ from torch.optim import Optimizer
 
 def save_model(
     round_num: int,
-    model: torch.nn.Module,
-    optimizer: Optimizer = None,
+    model: torch.nn.Module | OrderedDict,
+    optimizer: Optimizer | OrderedDict = None,
     dir_path="model",
 ):
     os.makedirs(dir_path, exist_ok=True)
-
     model_path = os.path.join(dir_path, f"model_{round_num:03d}.pth")
 
     obj = {
         "round": round_num,
-        "model_state": model.state_dict(),
+        "model_state": model.state_dict()
+        if isinstance(model, torch.nn.Module)
+        else model,
     }
 
     if optimizer:
         obj |= {
-            "optimizer_state": optimizer.state_dict(),
+            "optimizer_state": optimizer.state_dict()
+            if isinstance(optimizer, Optimizer)
+            else optimizer
         }
 
     torch.save(obj, model_path)
@@ -36,12 +40,16 @@ def save_history(
     os.makedirs(dir_path, exist_ok=True)
     history_path = os.path.join(dir_path, "model_history.csv")
 
-    history = pd.DataFrame()
-    if os.path.exists(history_path):
-        history = pd.read_csv(history_path)
+    history = (
+        pd.read_csv(history_path)
+        if os.path.exists(history_path)
+        else pd.DataFrame(columns=["round"])
+    )
 
-    if "round" in history:
-        history = history[history["round"] < round_num]
+    old_metrics = history[history["round"] == round_num]
+    if not old_metrics.empty:
+        metrics = old_metrics.to_dict("records")[-1] | metrics
+    history = history[history["round"] < round_num]
 
     metrics = {"round": round_num} | metrics
     metrics = pd.DataFrame([metrics])

@@ -182,10 +182,9 @@ if __name__ == "__main__":
     train(
         net=model,
         trainloader=trainloader,
-        epochs=5,
+        epochs=50,
         lr=1e-4,
         weight_decay=1e-6,
         device=device,
         testloader=valloader,
-        checkpoint=3,
     )
