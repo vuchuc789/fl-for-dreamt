@@ -78,7 +78,7 @@ def load_checkpoint(
     if not os.path.exists(model_path):
         return 0, {}
 
-    checkpoint = torch.load(model_path, weights_only=True)
+    checkpoint = torch.load(model_path, weights_only=False)
     model.load_state_dict(checkpoint["model_state"])
     if optimizer and "optimizer_state" in checkpoint:
         optimizer.load_state_dict(checkpoint["optimizer_state"])

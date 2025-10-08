@@ -28,12 +28,16 @@ def train(
     lr: float,
     weight_decay: float,
     device: Device,
+    proximal_mu: float = 0.0,
     testloader: DataLoader = None,
     checkpoint: int = 0,
 ):
     net.to(device)
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(net.parameters(), lr=lr, weight_decay=weight_decay)
+
+    if proximal_mu > 0:
+        global_params = [p.detach().clone() for p in net.parameters()]
 
     if testloader:
         checkpoint, history = load_checkpoint(
@@ -62,6 +66,22 @@ def train(
             y = y.to(device)
             optimizer.zero_grad()
             loss = criterion(net(X), y)
+
+            if proximal_mu > 0:
+                proximal_term = 0.0
+                for local_weights, global_weights in zip(
+                    net.parameters(), global_params
+                ):
+                    proximal_term += (
+                        torch.linalg.vector_norm(
+                            local_weights - global_weights,
+                            ord=2,
+                        )
+                        ** 2
+                    )
+
+                loss += (proximal_mu / 2) * proximal_term
+
             loss.backward()
             optimizer.step()
             train_loss += loss.item()
@@ -135,12 +155,15 @@ def test(
         raw_labels = le.inverse_transform(all_labels)
         raw_preds = le.inverse_transform(all_preds)
 
-        print(f"Test on {len(raw_labels)} samples:")
+        print(f"Total : {len(raw_labels):4d} samples")
         values, counts = np.unique(raw_labels, return_counts=True)
         zipped_dict = dict(zip(values, counts))
         label_width = max(len(label) for label in labels) + 1
         for label in labels:
-            print(f" - {label:<{label_width}}: {zipped_dict[label]:4d}")
+            print(
+                f" - {label:<{label_width}}:"
+                f" {zipped_dict[label] if label in zipped_dict else 0:4d}"
+            )
 
         cm = confusion_matrix(raw_labels, raw_preds, labels=labels)
         disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=labels)
@@ -206,7 +229,7 @@ if __name__ == "__main__":
     train(
         net=model,
         trainloader=trainloader,
-        epochs=50,
+        epochs=30,
         lr=1e-4,
         weight_decay=1e-6,
         device=device,

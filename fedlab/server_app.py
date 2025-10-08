@@ -3,24 +3,23 @@ from typing import Callable, Optional
 
 from flwr.app import (
     ArrayRecord,
-    ConfigRecord,
     Context,
     Message,
     MetricRecord,
     RecordDict,
 )
 from flwr.serverapp import Grid, ServerApp
-from flwr.serverapp.strategy import FedAvg
+from flwr.serverapp.strategy import FedProx
 
 from fedlab.task import Net
 from fedlab.utils.model import load_checkpoint, save_history, save_model
 
 
-class CustomStrategy(FedAvg):
+class CustomStrategy(FedProx):
     def __init__(
         self,
-        fraction_train: float = 1,
-        fraction_evaluate: float = 1,
+        fraction_train: float = 1.0,
+        fraction_evaluate: float = 1.0,
         min_train_nodes: int = 2,
         min_evaluate_nodes: int = 2,
         min_available_nodes: int = 2,
@@ -33,19 +32,21 @@ class CustomStrategy(FedAvg):
         evaluate_metrics_aggr_fn: Optional[
             Callable[[list[RecordDict], str], MetricRecord]
         ] = None,
+        proximal_mu: float = 0.0,
         checkpoint: int = 0,
     ) -> None:
         super().__init__(
-            fraction_train,
-            fraction_evaluate,
-            min_train_nodes,
-            min_evaluate_nodes,
-            min_available_nodes,
-            weighted_by_key,
-            arrayrecord_key,
-            configrecord_key,
-            train_metrics_aggr_fn,
-            evaluate_metrics_aggr_fn,
+            fraction_train=fraction_train,
+            fraction_evaluate=fraction_evaluate,
+            min_train_nodes=min_train_nodes,
+            min_evaluate_nodes=min_evaluate_nodes,
+            min_available_nodes=min_available_nodes,
+            weighted_by_key=weighted_by_key,
+            arrayrecord_key=arrayrecord_key,
+            configrecord_key=configrecord_key,
+            train_metrics_aggr_fn=train_metrics_aggr_fn,
+            evaluate_metrics_aggr_fn=evaluate_metrics_aggr_fn,
+            proximal_mu=proximal_mu,
         )
 
         self.checkpoint = checkpoint
@@ -55,9 +56,14 @@ class CustomStrategy(FedAvg):
     ) -> tuple[Optional[ArrayRecord], Optional[MetricRecord]]:
         arrays, metrics = super().aggregate_train(server_round, replies)
 
-        server_round += self.checkpoint
-        save_model(server_round, model=arrays.to_torch_state_dict())
-        save_history(server_round, metrics={k: v for k, v in metrics.items()})
+        save_model(
+            self.checkpoint + server_round,
+            model=arrays.to_torch_state_dict(),
+        )
+        save_history(
+            self.checkpoint + server_round,
+            metrics={k: v for k, v in metrics.items()},
+        )
 
         return arrays, metrics
 
@@ -66,8 +72,10 @@ class CustomStrategy(FedAvg):
     ) -> Optional[MetricRecord]:
         metrics = super().aggregate_evaluate(server_round, replies)
 
-        server_round += self.checkpoint
-        save_history(server_round, metrics={k: v for k, v in metrics.items()})
+        save_history(
+            self.checkpoint + server_round,
+            metrics={k: v for k, v in metrics.items()},
+        )
 
         return metrics
 
@@ -82,18 +90,19 @@ def main(grid: Grid, context: Context) -> None:
     fraction_train: float = context.run_config["fraction-train"]
     fraction_evaluate: float = context.run_config["fraction-evaluate"]
     num_rounds: int = context.run_config["num-server-rounds"]
-    lr: float = context.run_config["lr"]
-    weight_decay: float = context.run_config["weight-decay"]
+    proximal_mu: int = context.run_config["proximal-mu"]
 
     # Load global model
     global_model = Net()
     checkpoint, _ = load_checkpoint(global_model)
     arrays = ArrayRecord(global_model.state_dict())
+    print(checkpoint)
 
     # Initialize FedAvg strategy
     strategy = CustomStrategy(
         fraction_train=fraction_train,
         fraction_evaluate=fraction_evaluate,
+        proximal_mu=proximal_mu,
         checkpoint=checkpoint,
     )
 
@@ -101,11 +110,5 @@ def main(grid: Grid, context: Context) -> None:
     strategy.start(
         grid=grid,
         initial_arrays=arrays,
-        train_config=ConfigRecord(
-            {
-                "lr": lr,
-                "weight_decay": weight_decay,
-            }
-        ),
         num_rounds=num_rounds,
     )

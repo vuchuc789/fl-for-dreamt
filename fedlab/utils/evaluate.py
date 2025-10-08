@@ -7,8 +7,7 @@ from torch.types import Device
 from torch.utils.data import ConcatDataset, DataLoader
 
 from fedlab.data.dreamt import DREAMTDataset
-from fedlab.model.dreamt.gru import Net
-from fedlab.task import test
+from fedlab.task import Net, test
 from fedlab.utils.plot import LivePlot
 
 
@@ -26,7 +25,7 @@ def evaluate(
         print("Model not found!!")
         return
 
-    checkpoint = torch.load(model_path, weights_only=True)
+    checkpoint = torch.load(model_path, weights_only=False)
 
     if history_file:
         history_path = os.path.join(dir_path, history_file)
@@ -55,7 +54,9 @@ def evaluate(
 
 
 if __name__ == "__main__":
-    numOfParticipants = 20
+    # participants = [0]
+    participants = [i for i in range(20)]
+
     device = torch.device(
         torch.accelerator.current_accelerator().type
         if torch.accelerator.is_available()
@@ -67,7 +68,7 @@ if __name__ == "__main__":
     datasets = ConcatDataset(
         [
             DREAMTDataset(participant, test=True, transform=from_numpy)
-            for participant in range(numOfParticipants)
+            for participant in participants
         ]
     )
     dataloader = DataLoader(
@@ -78,7 +79,7 @@ if __name__ == "__main__":
 
     evaluate(
         net,
-        model_file="model_050.pth",
+        model_file="model_004.pth",
         history_file="model_history.csv",
         eval_dataloader=dataloader,
         device=device,

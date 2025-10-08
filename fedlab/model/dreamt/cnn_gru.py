@@ -38,7 +38,7 @@ class Net(nn.Module):
         last_hidden = h_n[-1]
 
         out = self.dropout(last_hidden)
-        out = F.relu(self.fc1(last_hidden))
+        out = F.relu(self.fc1(out))
         out = self.fc2(out)  # (batch, n_classes) (32, 6)
 
         return out

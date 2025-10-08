@@ -10,14 +10,28 @@ class Net(nn.Module):
             hidden_size=128,
             num_layers=1,
             batch_first=True,
-            # dropout=0.3,
+            # dropout=0.3, # 2 layers
         )
 
+        # 1 layer
         self.fc = nn.Linear(128, n_classes)
+
+        # 2 layers
+        self.dropout = nn.Dropout(0.3)
+        self.fc1 = nn.Linear(128, 64)
+        self.fc2 = nn.Linear(64, n_classes)
 
     def forward(self, x):
         # x: (batch, win_size, feat_num)
         _, h_n = self.gru(x)  # h_n: (num_layers, batch, hidden_size)
         last_hidden = h_n[-1]  # (batch, hidden_size) – last layer's hidden state
-        out = self.fc(last_hidden)
+
+        # 1 layer
+        out = self.fc(last_hidden)  # (batch, n_classes)
+
+        # 2 layers
+        # out = self.dropout(last_hidden)
+        # out = F.relu(self.fc1(out))
+        # out = self.fc2(out)  # (batch, n_classes)
+
         return out

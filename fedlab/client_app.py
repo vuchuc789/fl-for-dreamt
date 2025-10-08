@@ -32,9 +32,10 @@ def train(msg: Message, context: Context):
         net=model,
         trainloader=trainloader,
         epochs=context.run_config["local-epochs"],
-        lr=msg.content["config"]["lr"],
-        weight_decay=msg.content["config"]["weight_decay"],
+        lr=context.run_config["lr"],
+        weight_decay=context.run_config["weight-decay"],
         device=device,
+        proximal_mu=msg.content["config"]["proximal-mu"],
     )
 
     # Construct and return reply Message
