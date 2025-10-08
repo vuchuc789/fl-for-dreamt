@@ -1,12 +1,16 @@
+import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn.functional as F
 from sklearn.metrics import (
+    ConfusionMatrixDisplay,
+    confusion_matrix,
     f1_score,
     precision_score,
     recall_score,
     roc_auc_score,
 )
+from sklearn.preprocessing import LabelEncoder
 from torch import nn
 from torch.types import Device
 from torch.utils.data import DataLoader
@@ -98,6 +102,7 @@ def test(
     net: nn.Module,
     testloader: DataLoader,
     device: Device,
+    show_confusion_matrix: bool = False,
 ):
     net.to(device)
     criterion = nn.CrossEntropyLoss()
@@ -122,6 +127,25 @@ def test(
     all_labels = np.array(all_labels)
     all_preds = np.array(all_preds)
     all_probs = np.array(all_probs)
+
+    if show_confusion_matrix:
+        labels = ["P", "W", "N1", "N2", "N3", "R"]
+        le = LabelEncoder().fit(labels)
+
+        raw_labels = le.inverse_transform(all_labels)
+        raw_preds = le.inverse_transform(all_preds)
+
+        print(f"Test on {len(raw_labels)} samples:")
+        values, counts = np.unique(raw_labels, return_counts=True)
+        zipped_dict = dict(zip(values, counts))
+        label_width = max(len(label) for label in labels) + 1
+        for label in labels:
+            print(f" - {label:<{label_width}}: {zipped_dict[label]:4d}")
+
+        cm = confusion_matrix(raw_labels, raw_preds, labels=labels)
+        disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=labels)
+        disp.plot()
+        plt.show()
 
     # Metrics
     accuracy = correct / len(testloader.dataset)
