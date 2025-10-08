@@ -1,2 +1,2 @@
-data/dreamt/data_64Hz/*_preprocessed.csv filter=lfs diff=lfs merge=lfs -text
-data/dreamt/data_100Hz/*_preprocessed.csv filter=lfs diff=lfs merge=lfs -text
+# data/dreamt/data_64Hz/*_preprocessed.csv filter=lfs diff=lfs merge=lfs -text
+# data/dreamt/data_100Hz/*_preprocessed.csv filter=lfs diff=lfs merge=lfs -text

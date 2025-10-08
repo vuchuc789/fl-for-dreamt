@@ -162,8 +162,10 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
-data/har.zip
-data/dreamt/data_64Hz/*_whole_df.csv
-data/dreamt/data_100Hz/*_PSG_df_updated.csv
+# data/har.zip
+# data/dreamt/data_64Hz/*_whole_df.csv
+# data/dreamt/data_100Hz/*_PSG_df_updated.csv
+data/**
+!data/.gitkeep
 model/**
 !model/.gitkeep
