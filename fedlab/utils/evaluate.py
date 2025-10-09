@@ -79,7 +79,7 @@ if __name__ == "__main__":
 
     evaluate(
         net,
-        model_file="model_004.pth",
+        model_file="model_030.pth",
         history_file="model_history.csv",
         eval_dataloader=dataloader,
         device=device,

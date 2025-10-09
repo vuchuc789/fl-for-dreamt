@@ -6,9 +6,7 @@ class Net(nn.Module):
     def __init__(self, input_size=8, n_classes=6):
         super().__init__()
         # Expect input: (batch, seq_len=1920, input_size)
-        self.conv1 = nn.Conv1d(
-            in_channels=input_size, out_channels=32, kernel_size=5, stride=2, padding=2
-        )
+        self.conv1 = nn.Conv1d(input_size, 32, kernel_size=5, stride=2, padding=2)
         self.bn1 = nn.BatchNorm1d(32)
         self.pool1 = nn.MaxPool1d(2)
         self.conv2 = nn.Conv1d(32, 64, kernel_size=5, stride=2, padding=2)

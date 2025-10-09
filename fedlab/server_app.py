@@ -96,7 +96,6 @@ def main(grid: Grid, context: Context) -> None:
     global_model = Net()
     checkpoint, _ = load_checkpoint(global_model)
     arrays = ArrayRecord(global_model.state_dict())
-    print(checkpoint)
 
     # Initialize FedAvg strategy
     strategy = CustomStrategy(

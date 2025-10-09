@@ -234,4 +234,5 @@ if __name__ == "__main__":
         weight_decay=1e-6,
         device=device,
         testloader=valloader,
+        # checkpoint=30,
     )

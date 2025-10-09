@@ -1,5 +1,7 @@
 import torch.nn as nn
 
+# import torch.nn.functional as F
+
 
 class Net(nn.Module):
     def __init__(self, input_size: int = 8, n_classes: int = 6):
@@ -10,7 +12,7 @@ class Net(nn.Module):
             hidden_size=128,
             num_layers=1,
             batch_first=True,
-            # dropout=0.3, # 2 layers
+            # dropout=0.3,  # 2 layers
         )
 
         # 1 layer
