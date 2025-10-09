@@ -167,7 +167,7 @@ def test(
 
         cm = confusion_matrix(raw_labels, raw_preds, labels=labels)
         disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=labels)
-        disp.plot()
+        disp.plot(cmap=plt.cm.Blues)
         plt.show()
 
     # Metrics
