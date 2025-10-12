@@ -4,17 +4,22 @@ from datetime import datetime
 from urllib.parse import urljoin
 
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 import requests
+import seaborn as sns
+import torch
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 from torch import from_numpy
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
 from tqdm import tqdm
 
 FREQUENCY_IN = 64  # Hz
 FREQUENCY_OUT = 4  # Hz
 WINDOW_SIZE = 30  # s
+
+SLEEP_STAGES = ["P", "W", "N1", "N2", "N3", "R"]
 
 
 def download(filename: str):
@@ -195,7 +200,7 @@ class DREAMTDataset(Dataset):
         target_transform=None,
     ):
         df = pd.read_csv(
-            f"data/dreamt/data_100Hz/S{participant + 2:03d}_PSG_df_updated.csv"
+            f"data/dreamt/data_100Hz/S{participant + 2:03d}_PSG_df_updated_preprocessed.csv"
             if FREQUENCY_IN == 100
             else f"data/dreamt/data_64Hz/S{participant + 2:03d}_whole_df_preprocessed.csv"
         )
@@ -230,11 +235,7 @@ class DREAMTDataset(Dataset):
         )  # (win_num, win_size, feat_num)
 
         self.X = X_scaled.astype("float32")
-        self.y = (
-            LabelEncoder()
-            .fit(["P", "W", "N1", "N2", "N3", "R"])
-            .transform(y_test if test else y_train)
-        )
+        self.y = LabelEncoder().fit(SLEEP_STAGES).transform(y_test if test else y_train)
 
         self.transform = transform
         self.target_transform = target_transform
@@ -254,34 +255,53 @@ class DREAMTDataset(Dataset):
         return X, y
 
 
-def load_data(participant: int, batch_size: int = 32):
+def load_data(
+    participant: int,
+    batch_size: int = 32,
+    alpha_s: float = 1.0,
+    alpha_l: float = 1.0,
+):
+    train_dataset = DREAMTDataset(participant, test=False, transform=from_numpy)
+    test_dataset = DREAMTDataset(participant, test=True, transform=from_numpy)
+
+    _, y_train = train_dataset[:]
+
+    n_classes = len(SLEEP_STAGES)
+    class_counts = np.bincount(y_train, minlength=n_classes)
+
+    # avoid division by zero for missing classes
+    sampler_class_weights = np.zeros(n_classes, dtype=np.float32)
+    nonzero_mask = class_counts > 0
+    sampler_class_weights[nonzero_mask] = (1.0 / class_counts[nonzero_mask]) ** alpha_s
+
+    sample_weights = sampler_class_weights[y_train]
+
+    sampler = WeightedRandomSampler(
+        weights=sample_weights,
+        num_samples=len(y_train),
+        replacement=True,
+    )
+
     trainloader = DataLoader(
-        DREAMTDataset(participant, test=False, transform=from_numpy),
+        train_dataset,
         batch_size=batch_size,
-        shuffle=True,
+        # shuffle=True,  # conflict with sampler
+        sampler=sampler,
     )
     testloader = DataLoader(
-        DREAMTDataset(participant, test=True, transform=from_numpy),
+        test_dataset,
         batch_size=batch_size,
         shuffle=False,
     )
 
-    return trainloader, testloader
+    loss_class_weights = (class_counts / class_counts.sum()) ** alpha_l
+    loss_class_weights /= loss_class_weights.sum()
+    loss_class_weights = torch.tensor(loss_class_weights, dtype=torch.float32)
+
+    return trainloader, testloader, loss_class_weights
 
 
 if __name__ == "__main__":
-    # load_data(0)
-    # rnn = nn.GRU(8, 128, 1, batch_first=True)
-    # fc = nn.Linear(128, 6)
-    # for input, _ in load_data(0)[0]:
-    #     output, h_n = rnn(input)
-    #     out = fc(h_n[-1])
-    #     print(input.shape)
-    #     print(output.shape)
-    #     print(h_n.shape)
-    #     print(out.shape)
-    #     break
-
     numOfParticipants = 20
     numOfWorkers = os.cpu_count() // 2
 
@@ -301,6 +321,44 @@ if __name__ == "__main__":
     with ThreadPoolExecutor(numOfWorkers) as executor:
         features = {executor.submit(task, f): f for f in filenames}
         wait(features)
+
+    win_size = WINDOW_SIZE * FREQUENCY_OUT  # number of time steps per window
+    labels = [
+        pd.read_csv(
+            f"data/dreamt/data_100Hz/S{participant + 2:03d}_PSG_df_updated_preprocessed.csv"
+            if FREQUENCY_IN == 100
+            else f"data/dreamt/data_64Hz/S{participant + 2:03d}_whole_df_preprocessed.csv"
+        )[["Sleep_Stage"]]
+        .to_numpy()
+        .reshape(-1, win_size)[:, 0]
+        for participant in range(numOfParticipants)
+    ]
+    counts = np.zeros((len(SLEEP_STAGES), len(labels)), dtype=np.int64)
+    label_indices = {label: i for i, label in enumerate(SLEEP_STAGES)}
+    for i, la in enumerate(labels):
+        val, cnt = np.unique(la, return_counts=True)
+        for v, c in zip(val, cnt):
+            counts[label_indices[v], i] = c
+
+    df_counts = pd.DataFrame(
+        counts,
+        index=SLEEP_STAGES,
+        columns=[f"P{i + 1}" for i in range(numOfParticipants)],
+    )
+
+    plt.figure(figsize=(12, 6))
+    sns.heatmap(
+        df_counts,
+        annot=True,
+        fmt="d",
+        cmap=plt.cm.Blues,
+        cbar_kws={"label": "Sample Count"},
+    )
+    plt.title("Sleep Stage per Participant")
+    plt.xlabel("Participant")
+    plt.ylabel("Sleep Stage")
+    plt.tight_layout()
+    plt.show()
 
     df = pd.read_csv("data/dreamt/data_64Hz/S002_whole_df_preprocessed.csv")
     print(df.info())

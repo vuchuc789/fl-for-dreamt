@@ -12,10 +12,10 @@ from sklearn.metrics import (
 )
 from sklearn.preprocessing import LabelEncoder
 from torch import nn
-from torch.types import Device
+from torch.types import Device, Tensor
 from torch.utils.data import DataLoader
 
-from fedlab.data.dreamt import load_data
+from fedlab.data.dreamt import SLEEP_STAGES, load_data
 from fedlab.model.dreamt.gru import Net
 from fedlab.utils.model import load_checkpoint, save_history, save_model
 from fedlab.utils.plot import LivePlot
@@ -28,12 +28,14 @@ def train(
     lr: float,
     weight_decay: float,
     device: Device,
+    class_weights: Tensor = None,
     proximal_mu: float = 0.0,
     testloader: DataLoader = None,
     checkpoint: int = 0,
 ):
     net.to(device)
-    criterion = nn.CrossEntropyLoss()
+    class_weights = class_weights.to(device) if class_weights is not None else None
+    criterion = nn.CrossEntropyLoss(weight=class_weights)
     optimizer = torch.optim.Adam(net.parameters(), lr=lr, weight_decay=weight_decay)
 
     if proximal_mu > 0:
@@ -149,8 +151,7 @@ def test(
     all_probs = np.array(all_probs)
 
     if show_confusion_matrix:
-        labels = ["P", "W", "N1", "N2", "N3", "R"]
-        le = LabelEncoder().fit(labels)
+        le = LabelEncoder().fit(SLEEP_STAGES)
 
         raw_labels = le.inverse_transform(all_labels)
         raw_preds = le.inverse_transform(all_preds)
@@ -158,15 +159,15 @@ def test(
         print(f"Total : {len(raw_labels):4d} samples")
         values, counts = np.unique(raw_labels, return_counts=True)
         zipped_dict = dict(zip(values, counts))
-        label_width = max(len(label) for label in labels) + 1
-        for label in labels:
+        label_width = max(len(label) for label in SLEEP_STAGES) + 1
+        for label in SLEEP_STAGES:
             print(
                 f" - {label:<{label_width}}:"
                 f" {zipped_dict[label] if label in zipped_dict else 0:4d}"
             )
 
-        cm = confusion_matrix(raw_labels, raw_preds, labels=labels)
-        disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=labels)
+        cm = confusion_matrix(raw_labels, raw_preds, labels=SLEEP_STAGES)
+        disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=SLEEP_STAGES)
         disp.plot(cmap=plt.cm.Blues)
         plt.show()
 
@@ -224,7 +225,12 @@ if __name__ == "__main__":
     model = Net()
     model.to(device)
 
-    trainloader, valloader = load_data(0, batch_size=32)
+    trainloader, valloader, class_weights = load_data(
+        0,
+        batch_size=32,
+        # alpha_s=0.0,
+        # alpha_l=0.0,
+    )
 
     train(
         net=model,
@@ -232,6 +238,7 @@ if __name__ == "__main__":
         epochs=30,
         lr=1e-4,
         weight_decay=1e-6,
+        class_weights=class_weights,
         device=device,
         testloader=valloader,
         # checkpoint=30,

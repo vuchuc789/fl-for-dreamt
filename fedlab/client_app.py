@@ -25,7 +25,7 @@ def train(msg: Message, context: Context):
     # Load the data
     partition_id = context.node_config["partition-id"]
     # num_partitions = context.node_config["num-partitions"]
-    trainloader, _ = load_data(partition_id, batch_size=32)
+    trainloader, _, class_weights = load_data(partition_id, batch_size=32)
 
     # Call the training function
     metrics = train_fn(
@@ -35,6 +35,7 @@ def train(msg: Message, context: Context):
         lr=context.run_config["lr"],
         weight_decay=context.run_config["weight-decay"],
         device=device,
+        class_weights=class_weights,
         proximal_mu=msg.content["config"]["proximal-mu"],
     )
 
@@ -63,7 +64,7 @@ def evaluate(msg: Message, context: Context):
     # Load the data
     partition_id = context.node_config["partition-id"]
     # num_partitions = context.node_config["num-partitions"]
-    _, valloader = load_data(partition_id, batch_size=32)
+    _, valloader, _ = load_data(partition_id, batch_size=32)
 
     # Call the evaluation function
     metrics = test_fn(
