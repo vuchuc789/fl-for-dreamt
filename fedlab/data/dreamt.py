@@ -82,7 +82,13 @@ def download(filename: str):
         print(f"[{filename}] ❌ Failed: {e}")
 
 
-def preprocess(filename: str, fs_in: int, fs_out: int, win_size: int):
+def preprocess(
+    filename: str,
+    fs_in: int,
+    fs_out: int,
+    win_size: int,
+    mode: str = "fix",
+):
     dir_path = "data/dreamt/"
     src_path = os.path.join(dir_path, filename)
     dst_path = src_path.replace(".csv", "_preprocessed.csv")
@@ -90,11 +96,14 @@ def preprocess(filename: str, fs_in: int, fs_out: int, win_size: int):
     os.makedirs(os.path.dirname(src_path), exist_ok=True)
 
     n_in = fs_in * win_size
-    n_out = 1000000 // fs_out  # microseconds step for resample
+    # n_out = fs_out * win_size
+    p_out = 1000000 // fs_out  # microseconds step for resample
     chunk_size = n_in * 50
 
     total = remain = update = sample = 0
     start_time = datetime.now()
+
+    leftover = pd.DataFrame()
 
     try:
         reader = pd.read_csv(src_path, chunksize=chunk_size)
@@ -135,43 +144,96 @@ def preprocess(filename: str, fs_in: int, fs_out: int, win_size: int):
                     "Sleep_Stage",
                 ]
                 chunk = chunk[[c for c in keep_cols if c in chunk.columns]]
-
                 # TIMESTAMP → timedelta index
                 chunk["TIMESTAMP"] = pd.to_timedelta(chunk["TIMESTAMP"], unit="s")
-                chunk = chunk.set_index("TIMESTAMP")
 
-                # Filter by window validity
-                chunk["Window_Id"] = (chunk.index.total_seconds() // win_size).astype(
-                    int
-                )
-                chunk = chunk.groupby("Window_Id").filter(
-                    lambda g: (len(g) == n_in and g.notna().all().all())
-                )
-                remain += len(chunk)
-
-                # Harmonize labels
-                labels = chunk.groupby("Window_Id")["Sleep_Stage"].apply(
-                    lambda x: x.mode().iloc[0]
-                )
-                original_labels = chunk["Sleep_Stage"]
-                chunk["Sleep_Stage"] = chunk["Window_Id"].map(labels)
-                update += (original_labels != chunk["Sleep_Stage"]).sum()
-
-                # Resample if needed
-                if fs_out < fs_in:
-                    chunk = chunk.resample(f"{n_out}us").agg(
-                        {
-                            col: "mean"
-                            for col in chunk.columns
-                            if col not in ["Sleep_Stage", "Window_Id"]
-                        }
-                        | {"Sleep_Stage": "first"}
+                if mode == "fix":
+                    chunk.set_index("TIMESTAMP", inplace=True)
+                    # Filter by window validity
+                    chunk["Window_Id"] = (
+                        chunk.index.total_seconds() // win_size
+                    ).astype(int)
+                    chunk = chunk.groupby("Window_Id").filter(
+                        lambda g: (len(g) == n_in and g.notna().all().all())
                     )
-                sample += len(chunk)
+                    remain += len(chunk)
+
+                    # Harmonize labels
+                    labels = chunk.groupby("Window_Id")["Sleep_Stage"].apply(
+                        lambda x: x.mode().iloc[0]
+                    )
+                    original_labels = chunk["Sleep_Stage"]
+                    chunk["Sleep_Stage"] = chunk["Window_Id"].map(labels)
+                    update += (original_labels != chunk["Sleep_Stage"]).sum()
+
+                    # Resample if needed
+                    if fs_out < fs_in:
+                        chunk = chunk.resample(f"{p_out}us").agg(
+                            {
+                                col: "mean"
+                                for col in chunk.columns
+                                if col != "Sleep_Stage"
+                            }
+                            | {"Sleep_Stage": "first"}
+                        )
+                    sample += len(chunk)
+
+                    chunk.drop(columns=["Window_Id"], inplace=True)
+                    chunk.reset_index(inplace=True)
+
+                elif mode == "force":
+                    if not leftover.empty:
+                        chunk = pd.concat([leftover, chunk], ignore_index=True)
+                        leftover = pd.DataFrame()
+
+                    i, offset = 0, 0
+                    windows = []
+                    while (i + 1) * n_in + offset <= len(chunk):
+                        win = chunk.iloc[
+                            i * n_in + offset : (i + 1) * n_in + offset, :
+                        ].reset_index(drop=True)
+
+                        if (
+                            len(win["Sleep_Stage"].unique()) > 1
+                            or win.isna().any().any()
+                        ):
+                            first_label = win["Sleep_Stage"].iloc[0]
+                            mask = win["Sleep_Stage"] != first_label
+                            if mask.any():
+                                shift = mask.idxmax()  # first position of label change
+                            else:
+                                shift = len(win)  # all same label → skip entire window
+                            offset += shift
+                            continue
+
+                        remain += len(win)
+
+                        # Resample if needed
+                        if fs_out < fs_in:
+                            win.set_index("TIMESTAMP", inplace=True)
+                            win = win.resample(f"{p_out}us").agg(
+                                {
+                                    col: "mean"
+                                    for col in win.columns
+                                    if col != "Sleep_Stage"
+                                }
+                                | {"Sleep_Stage": "first"}
+                            )
+                            win.reset_index(inplace=True)
+
+                        sample += len(win)
+
+                        windows.append(win)
+                        i += 1
+
+                    if i * n_in + offset < len(chunk):
+                        leftover = chunk.iloc[i * n_in + offset :].reset_index(
+                            drop=True
+                        )
+
+                    chunk = pd.concat(windows, ignore_index=True)
 
                 # Save
-                chunk.drop(columns=["Window_Id"], inplace=True, errors="ignore")
-                chunk.reset_index(inplace=True)
                 chunk["TIMESTAMP"] = chunk["TIMESTAMP"].dt.total_seconds()
                 chunk.to_csv(f_out, index=False, header=not header_written)
                 header_written = True
@@ -316,7 +378,7 @@ if __name__ == "__main__":
 
     def task(filename: str):
         download(filename)
-        preprocess(filename, FREQUENCY_IN, FREQUENCY_OUT, WINDOW_SIZE)
+        preprocess(filename, FREQUENCY_IN, FREQUENCY_OUT, WINDOW_SIZE, mode="force")
 
     with ThreadPoolExecutor(numOfWorkers) as executor:
         features = {executor.submit(task, f): f for f in filenames}
