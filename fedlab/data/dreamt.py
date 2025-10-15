@@ -144,42 +144,44 @@ def preprocess(
                     "Sleep_Stage",
                 ]
                 chunk = chunk[[c for c in keep_cols if c in chunk.columns]]
-                # TIMESTAMP → timedelta index
-                chunk["TIMESTAMP"] = pd.to_timedelta(chunk["TIMESTAMP"], unit="s")
 
                 if mode == "fix":
-                    chunk.set_index("TIMESTAMP", inplace=True)
                     # Filter by window validity
-                    chunk["Window_Id"] = (
-                        chunk.index.total_seconds() // win_size
-                    ).astype(int)
+                    chunk["Window_Id"] = (chunk["TIMESTAMP"] // win_size).astype(int)
                     chunk = chunk.groupby("Window_Id").filter(
                         lambda g: (len(g) == n_in and g.notna().all().all())
                     )
                     remain += len(chunk)
 
-                    # Harmonize labels
-                    labels = chunk.groupby("Window_Id")["Sleep_Stage"].apply(
+                    labels = chunk.groupby("Window_Id")["Sleep_Stage"].agg(
                         lambda x: x.mode().iloc[0]
                     )
                     original_labels = chunk["Sleep_Stage"]
                     chunk["Sleep_Stage"] = chunk["Window_Id"].map(labels)
                     update += (original_labels != chunk["Sleep_Stage"]).sum()
 
+                    chunk.drop(columns=["Window_Id"], inplace=True)
+
                     # Resample if needed
                     if fs_out < fs_in:
-                        chunk = chunk.resample(f"{p_out}us").agg(
-                            {
-                                col: "mean"
-                                for col in chunk.columns
-                                if col != "Sleep_Stage"
-                            }
-                            | {"Sleep_Stage": "first"}
+                        chunk["TIMESTAMP"] = pd.to_timedelta(
+                            chunk["TIMESTAMP"], unit="s"
                         )
-                    sample += len(chunk)
+                        chunk = (
+                            chunk.resample(f"{p_out}us", on="TIMESTAMP")
+                            .agg(
+                                {
+                                    col: "mean"
+                                    for col in chunk.columns
+                                    if col != "Sleep_Stage"
+                                }
+                                | {"Sleep_Stage": "first"}
+                            )
+                            .reset_index(drop=True)
+                        )
+                        chunk["TIMESTAMP"] = chunk["TIMESTAMP"].dt.total_seconds()
 
-                    chunk.drop(columns=["Window_Id"], inplace=True)
-                    chunk.reset_index(inplace=True)
+                    sample += len(chunk)
 
                 elif mode == "force":
                     if not leftover.empty:
@@ -210,16 +212,22 @@ def preprocess(
 
                         # Resample if needed
                         if fs_out < fs_in:
-                            win.set_index("TIMESTAMP", inplace=True)
-                            win = win.resample(f"{p_out}us").agg(
-                                {
-                                    col: "mean"
-                                    for col in win.columns
-                                    if col != "Sleep_Stage"
-                                }
-                                | {"Sleep_Stage": "first"}
+                            win["TIMESTAMP"] = pd.to_timedelta(
+                                win["TIMESTAMP"], unit="s"
                             )
-                            win.reset_index(inplace=True)
+                            win = (
+                                win.resample(f"{p_out}us", on="TIMESTAMP")
+                                .agg(
+                                    {
+                                        col: "mean"
+                                        for col in win.columns
+                                        if col != "Sleep_Stage"
+                                    }
+                                    | {"Sleep_Stage": "first"}
+                                )
+                                .reset_index(drop=True)
+                            )
+                            win["TIMESTAMP"] = win["TIMESTAMP"].dt.total_seconds()
 
                         sample += len(win)
 
@@ -234,7 +242,6 @@ def preprocess(
                     chunk = pd.concat(windows, ignore_index=True)
 
                 # Save
-                chunk["TIMESTAMP"] = chunk["TIMESTAMP"].dt.total_seconds()
                 chunk.to_csv(f_out, index=False, header=not header_written)
                 header_written = True
 
@@ -321,33 +328,38 @@ def load_data(
     participant: int,
     batch_size: int = 32,
     alpha_s: float = 1.0,
-    alpha_l: float = 1.0,
+    alpha_l: float = -1.0,
 ):
     train_dataset = DREAMTDataset(participant, test=False, transform=from_numpy)
     test_dataset = DREAMTDataset(participant, test=True, transform=from_numpy)
 
-    _, y_train = train_dataset[:]
+    if alpha_s != 0.0 or alpha_l != 0.0:
+        _, y_train = train_dataset[:]
 
-    n_classes = len(SLEEP_STAGES)
-    class_counts = np.bincount(y_train, minlength=n_classes)
+        n_classes = len(SLEEP_STAGES)
+        class_counts = np.bincount(y_train, minlength=n_classes)
 
-    # avoid division by zero for missing classes
-    sampler_class_weights = np.zeros(n_classes, dtype=np.float32)
-    nonzero_mask = class_counts > 0
-    sampler_class_weights[nonzero_mask] = (1.0 / class_counts[nonzero_mask]) ** alpha_s
+        # avoid division by zero for missing classes
+        nonzero_mask = class_counts > 0
+        class_weights = np.zeros(n_classes, dtype=np.float32)
+        class_weights[nonzero_mask] = 1.0 / class_counts[nonzero_mask]
 
-    sample_weights = sampler_class_weights[y_train]
+    sampler = None
+    if alpha_s != 0.0:
+        sampler_class_weights = class_weights.copy()
+        sampler_class_weights[nonzero_mask] **= alpha_s
+        sample_weights = sampler_class_weights[y_train]
 
-    sampler = WeightedRandomSampler(
-        weights=sample_weights,
-        num_samples=len(y_train),
-        replacement=True,
-    )
+        sampler = WeightedRandomSampler(
+            weights=sample_weights,
+            num_samples=len(y_train),
+            replacement=True,
+        )
 
     trainloader = DataLoader(
         train_dataset,
         batch_size=batch_size,
-        # shuffle=True,  # conflict with sampler
+        shuffle=True if sampler is None else None,  # conflict with sampler
         sampler=sampler,
     )
     testloader = DataLoader(
@@ -356,9 +368,12 @@ def load_data(
         shuffle=False,
     )
 
-    loss_class_weights = (class_counts / class_counts.sum()) ** alpha_l
-    loss_class_weights /= loss_class_weights.sum()
-    loss_class_weights = torch.tensor(loss_class_weights, dtype=torch.float32)
+    loss_class_weights = None
+    if alpha_l != 0.0:
+        loss_class_weights = class_weights.copy()
+        loss_class_weights[nonzero_mask] **= alpha_l
+        loss_class_weights /= loss_class_weights.sum()  # normalize to sum to 1
+        loss_class_weights = torch.tensor(loss_class_weights, dtype=torch.float32)
 
     return trainloader, testloader, loss_class_weights
 

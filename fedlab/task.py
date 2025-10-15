@@ -21,6 +21,30 @@ from fedlab.utils.model import load_checkpoint, save_history, save_model
 from fedlab.utils.plot import LivePlot
 
 
+class FocalLoss(nn.Module):
+    def __init__(self, alpha=None, gamma=2.0, reduction="mean"):
+        super().__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.reduction = reduction
+
+    def forward(self, logits, targets):
+        logpt = F.log_softmax(logits, dim=1)
+        pt = torch.exp(logpt)
+        logpt = logpt.gather(1, targets.unsqueeze(1)).squeeze(1)
+        pt = pt.gather(1, targets.unsqueeze(1)).squeeze(1)
+
+        loss = -((1 - pt) ** self.gamma) * logpt
+        if self.alpha is not None:
+            loss *= self.alpha[targets]
+
+        if self.reduction == "mean":
+            return loss.mean()
+        if self.reduction == "sum":
+            return loss.sum()
+        return loss
+
+
 def train(
     net: nn.Module,
     trainloader: DataLoader,
@@ -29,16 +53,18 @@ def train(
     weight_decay: float,
     device: Device,
     class_weights: Tensor = None,
+    gamma: float = 0.0,
     proximal_mu: float = 0.0,
     testloader: DataLoader = None,
     checkpoint: int = 0,
 ):
     net.to(device)
     class_weights = class_weights.to(device) if class_weights is not None else None
-    criterion = nn.CrossEntropyLoss(weight=class_weights)
+    # criterion = nn.CrossEntropyLoss(weight=class_weights)
+    criterion = FocalLoss(alpha=class_weights, gamma=gamma)
     optimizer = torch.optim.Adam(net.parameters(), lr=lr, weight_decay=weight_decay)
 
-    if proximal_mu > 0:
+    if proximal_mu > 0.0:
         global_params = [p.detach().clone() for p in net.parameters()]
 
     if testloader:
@@ -228,8 +254,8 @@ if __name__ == "__main__":
     trainloader, valloader, class_weights = load_data(
         0,
         batch_size=32,
-        # alpha_s=0.0,
-        # alpha_l=0.0,
+        alpha_s=1.0,
+        alpha_l=-1.0,
     )
 
     train(
@@ -239,6 +265,7 @@ if __name__ == "__main__":
         lr=1e-4,
         weight_decay=1e-6,
         class_weights=class_weights,
+        gamma=0.0,
         device=device,
         testloader=valloader,
         # checkpoint=30,
