@@ -8,7 +8,6 @@ import numpy as np
 import pandas as pd
 import requests
 import seaborn as sns
-import torch
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 from torch import from_numpy
@@ -20,6 +19,14 @@ FREQUENCY_OUT = 4  # Hz
 WINDOW_SIZE = 30  # s
 
 SLEEP_STAGES = ["P", "W", "N1", "N2", "N3", "R"]
+SLEEP_STAGE_MAPPING = {
+    "P": 1,
+    "W": 1,
+    "N1": 0,
+    "N2": 0,
+    "N3": 0,
+    "R": 0,
+}  # 0: Sleep, 1: Wake
 
 
 def download(filename: str):
@@ -267,6 +274,7 @@ class DREAMTDataset(Dataset):
         test=False,
         transform=None,
         target_transform=None,
+        mode="multiclass",
     ):
         df = pd.read_csv(
             f"data/dreamt/data_100Hz/S{participant + 2:03d}_PSG_df_updated_preprocessed.csv"
@@ -304,7 +312,15 @@ class DREAMTDataset(Dataset):
         )  # (win_num, win_size, feat_num)
 
         self.X = X_scaled.astype("float32")
-        self.y = LabelEncoder().fit(SLEEP_STAGES).transform(y_test if test else y_train)
+
+        if mode == "binary":
+            self.y = np.vectorize(SLEEP_STAGE_MAPPING.get)(y_test if test else y_train)
+        elif mode == "multiclass":
+            self.y = (
+                LabelEncoder().fit(SLEEP_STAGES).transform(y_test if test else y_train)
+            )
+        else:
+            raise Exception(f"Mode {mode} is not supported!!")
 
         self.transform = transform
         self.target_transform = target_transform
@@ -329,14 +345,21 @@ def load_data(
     batch_size: int = 32,
     alpha_s: float = 1.0,
     alpha_l: float = -1.0,
+    mode="multiclass",
 ):
-    train_dataset = DREAMTDataset(participant, test=False, transform=from_numpy)
-    test_dataset = DREAMTDataset(participant, test=True, transform=from_numpy)
+    train_dataset = DREAMTDataset(
+        participant, test=False, transform=from_numpy, mode=mode
+    )
+    test_dataset = DREAMTDataset(
+        participant, test=True, transform=from_numpy, mode=mode
+    )
 
     if alpha_s != 0.0 or alpha_l != 0.0:
         _, y_train = train_dataset[:]
 
-        n_classes = len(SLEEP_STAGES)
+        n_classes = (
+            len(SLEEP_STAGES) if mode == "multiclass" else 2  # 2 for binary mode
+        )
         class_counts = np.bincount(y_train, minlength=n_classes)
 
         # avoid division by zero for missing classes
@@ -373,7 +396,9 @@ def load_data(
         loss_class_weights = class_weights.copy()
         loss_class_weights[nonzero_mask] **= alpha_l
         loss_class_weights /= loss_class_weights.sum()  # normalize to sum to 1
-        loss_class_weights = torch.tensor(loss_class_weights, dtype=torch.float32)
+
+        if mode == "binary":
+            loss_class_weights = loss_class_weights[1]
 
     return trainloader, testloader, loss_class_weights
 

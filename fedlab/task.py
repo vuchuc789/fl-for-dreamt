@@ -1,3 +1,5 @@
+from typing import Literal
+
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
@@ -9,6 +11,7 @@ from sklearn.metrics import (
     precision_score,
     recall_score,
     roc_auc_score,
+    roc_curve,
 )
 from sklearn.preprocessing import LabelEncoder
 from torch import nn
@@ -20,23 +23,61 @@ from fedlab.model.dreamt.gru import Net
 from fedlab.utils.model import load_checkpoint, save_history, save_model
 from fedlab.utils.plot import LivePlot
 
+MODE: Literal["binary", "multiclass"] = "binary"
+
 
 class FocalLoss(nn.Module):
-    def __init__(self, alpha=None, gamma=2.0, reduction="mean"):
+    def __init__(self, alpha=None, gamma=2.0, reduction="mean", mode="multiclass"):
         super().__init__()
         self.alpha = alpha
         self.gamma = gamma
         self.reduction = reduction
+        self.mode = mode
 
     def forward(self, logits, targets):
-        logpt = F.log_softmax(logits, dim=1)
-        pt = torch.exp(logpt)
-        logpt = logpt.gather(1, targets.unsqueeze(1)).squeeze(1)
-        pt = pt.gather(1, targets.unsqueeze(1)).squeeze(1)
+        if self.mode == "binary":
+            targets = targets.view(-1, 1).float()
+            logits = logits.view(-1, 1)
 
-        loss = -((1 - pt) ** self.gamma) * logpt
-        if self.alpha is not None:
-            loss *= self.alpha[targets]
+            bce_loss = F.binary_cross_entropy_with_logits(
+                logits, targets, reduction="none"
+            )
+
+            probs = torch.sigmoid(logits)
+            pt = probs * targets + (1 - probs) * (1 - targets)
+
+            loss = ((1 - pt) ** self.gamma) * bce_loss
+
+            if self.alpha is not None:
+                alpha_t = self.alpha * targets + (1 - self.alpha) * (1 - targets)
+                loss = alpha_t * loss
+
+        elif self.mode == "multiclass":
+            logpt = F.log_softmax(logits, dim=1)
+            pt = torch.exp(logpt)
+
+            logpt = logpt.gather(1, targets.unsqueeze(1)).squeeze(1)
+            pt = pt.gather(1, targets.unsqueeze(1)).squeeze(1)
+
+            loss = -((1 - pt) ** self.gamma) * logpt
+
+            if self.alpha is not None:
+                loss = self.alpha[targets] * loss
+
+            if self.alpha is not None:
+                if isinstance(self.alpha, (list, tuple)):
+                    alpha_t = torch.tensor(
+                        self.alpha,
+                        dtype=torch.float32,
+                        device=logits.device,
+                    )
+                else:
+                    alpha_t = self.alpha
+
+                loss = alpha_t[targets] * loss
+
+        else:
+            raise Exception(f"Mode {self.mode} is not supported!!")
 
         if self.reduction == "mean":
             return loss.mean()
@@ -57,11 +98,10 @@ def train(
     proximal_mu: float = 0.0,
     testloader: DataLoader = None,
     checkpoint: int = 0,
+    mode: str = "multiclass",
 ):
     net.to(device)
-    class_weights = class_weights.to(device) if class_weights is not None else None
-    # criterion = nn.CrossEntropyLoss(weight=class_weights)
-    criterion = FocalLoss(alpha=class_weights, gamma=gamma)
+    criterion = FocalLoss(alpha=class_weights, gamma=gamma, mode=mode)
     optimizer = torch.optim.Adam(net.parameters(), lr=lr, weight_decay=weight_decay)
 
     if proximal_mu > 0.0:
@@ -78,10 +118,13 @@ def train(
                 epochs=history["round"],
                 train_losses=history["train_loss"],
                 test_losses=history["test_loss"],
-                accuracies=history["accuracy"],
+                metrics=history["accuracy"] if mode == "multiclass" else history["auc"],
+                metric_name="Accuracy" if mode == "multiclass" else "AUC",
             )
             if history
-            else LivePlot()
+            else LivePlot(
+                metric_name="Accuracy" if mode == "multiclass" else "AUC",
+            )
         )
 
     epochs += checkpoint
@@ -95,7 +138,7 @@ def train(
             optimizer.zero_grad()
             loss = criterion(net(X), y)
 
-            if proximal_mu > 0:
+            if proximal_mu > 0.0:
                 proximal_term = 0.0
                 for local_weights, global_weights in zip(
                     net.parameters(), global_params
@@ -119,12 +162,13 @@ def train(
         if testloader:
             save_model(epoch, model=model, optimizer=optimizer)
 
-            metrics = test(net, testloader, device)
+            metrics = test(net, testloader, device, mode=mode)
             save_history(epoch, metrics={"train_loss": train_loss} | metrics)
 
             print(
                 f"Epoch {epoch}/{epochs} | Train Loss: {train_loss:.4f}"
                 f" | Test Loss: {metrics['test_loss']:.4f}, "
+                f"Threshold: {metrics['threshold']:.4f}, "
                 f"Acc: {metrics['accuracy']:.4f}, "
                 f"Prec: {metrics['precision']:.4f}, "
                 f"Rec: {metrics['recall']:.4f}, "
@@ -135,7 +179,7 @@ def train(
                 epoch,
                 train_loss=train_loss,
                 test_loss=metrics["test_loss"],
-                accuracy=metrics["accuracy"],
+                metric=metrics["accuracy"] if mode == "multiclass" else metrics["auc"],
             )
 
     if testloader:
@@ -150,88 +194,134 @@ def test(
     net: nn.Module,
     testloader: DataLoader,
     device: Device,
-    show_confusion_matrix: bool = False,
+    plot: bool = False,
+    mode: str = "multiclass",
 ):
     net.to(device)
-    criterion = nn.CrossEntropyLoss()
-    all_labels, all_preds, all_probs = [], [], []
-    loss, correct = 0.0, 0
 
+    if mode == "binary":
+        criterion = nn.BCEWithLogitsLoss()
+    elif mode == "multiclass":
+        criterion = nn.CrossEntropyLoss()
+    else:
+        raise Exception(f"Mode {mode} is not supported!!")
+
+    all_labels, all_probs = [], []
+    test_loss = 0.0
+
+    net.eval()
     with torch.no_grad():
         for X, y in testloader:
             X, y = X.to(device), y.to(device)
             outputs = net(X)
-            probs = F.softmax(outputs, dim=1)  # class probabilities
-            preds = torch.argmax(probs, 1)
 
-            loss += criterion(outputs, y).item()
-            correct += (preds == y).sum().item()
+            if mode == "binary":
+                outputs = outputs.squeeze(1)  # (batch,)
+                probs = torch.sigmoid(outputs)
+                loss = criterion(outputs, y.float())
+            else:
+                probs = F.softmax(outputs, dim=1)
+                loss = criterion(outputs, y)
 
             all_labels.extend(y.cpu().numpy())
-            all_preds.extend(preds.cpu().numpy())
             all_probs.extend(probs.cpu().numpy())
+            test_loss += loss.item()
 
-    # Convert to numpy
     all_labels = np.array(all_labels)
-    all_preds = np.array(all_preds)
     all_probs = np.array(all_probs)
+    test_loss = test_loss / len(testloader)
 
-    if show_confusion_matrix:
-        le = LabelEncoder().fit(SLEEP_STAGES)
+    if mode == "binary":
+        fpr, tpr, thresholds = roc_curve(all_labels, all_probs)
+        J_scores = tpr - fpr
+        best_idx = np.argmax(J_scores)
+        best_threshold = thresholds[best_idx]
+        all_preds = (all_probs >= best_threshold).astype(int)
+    elif mode == "multiclass":
+        best_threshold = 0.0  # no threshold for multi-class classification
+        all_preds = np.argmax(all_probs, 1)
+    else:
+        raise Exception(f"Mode {mode} is not supported!!")
 
-        raw_labels = le.inverse_transform(all_labels)
-        raw_preds = le.inverse_transform(all_preds)
-
-        print(f"Total : {len(raw_labels):4d} samples")
-        values, counts = np.unique(raw_labels, return_counts=True)
-        zipped_dict = dict(zip(values, counts))
-        label_width = max(len(label) for label in SLEEP_STAGES) + 1
-        for label in SLEEP_STAGES:
-            print(
-                f" - {label:<{label_width}}:"
-                f" {zipped_dict[label] if label in zipped_dict else 0:4d}"
-            )
-
-        cm = confusion_matrix(raw_labels, raw_preds, labels=SLEEP_STAGES)
-        disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=SLEEP_STAGES)
-        disp.plot(cmap=plt.cm.Blues)
-        plt.show()
-
-    # Metrics
-    accuracy = correct / len(testloader.dataset)
-    loss = loss / len(testloader)
+    accuracy = (all_preds == all_labels).mean()
     precision = precision_score(
         all_labels,
         all_preds,
-        average="weighted",
+        average="binary" if mode == "binary" else "weighted",
         zero_division=0,
     )
     recall = recall_score(
         all_labels,
         all_preds,
-        average="weighted",
+        average="binary" if mode == "binary" else "weighted",
         zero_division=0,
     )
     f1 = f1_score(
         all_labels,
         all_preds,
-        average="weighted",
+        average="binary" if mode == "binary" else "weighted",
         zero_division=0,
     )
 
-    # AUC (multi-class one-vs-rest)
     try:
-        auc = roc_auc_score(
-            all_labels,
-            all_probs,
-            multi_class="ovr",
-            average="weighted",
-        )
+        if mode == "binary":
+            auc = roc_auc_score(
+                all_labels,
+                all_probs,
+            )
+        else:
+            auc = roc_auc_score(
+                all_labels,
+                all_probs,
+                multi_class="ovr",
+                average="weighted",
+            )
     except ValueError:
         auc = 0.0  # if not computable
 
+    if plot:
+        if mode == "multiclass":
+            le = LabelEncoder().fit(SLEEP_STAGES)
+
+            raw_labels = le.inverse_transform(all_labels)
+            raw_preds = le.inverse_transform(all_preds)
+
+            print(f"Total : {len(raw_labels):4d} samples")
+            values, counts = np.unique(raw_labels, return_counts=True)
+            zipped_dict = dict(zip(values, counts))
+            label_width = max(len(label) for label in SLEEP_STAGES) + 1
+            for label in SLEEP_STAGES:
+                print(
+                    f" - {label:<{label_width}}:"
+                    f" {zipped_dict[label] if label in zipped_dict else 0:4d}"
+                )
+
+            cm = confusion_matrix(raw_labels, raw_preds, labels=SLEEP_STAGES)
+            disp = ConfusionMatrixDisplay(
+                confusion_matrix=cm, display_labels=SLEEP_STAGES
+            )
+            disp.plot(cmap=plt.cm.Blues)
+            plt.show()
+        elif mode == "binary":
+            stage_mapping = {0: "Sleep", 1: "Wake"}
+            raw_labels = np.vectorize(stage_mapping.get)(all_labels)
+            raw_preds = np.vectorize(stage_mapping.get)(all_preds)
+
+            print(f"Total : {len(raw_labels):4d} samples")
+            values, counts = np.unique(raw_labels, return_counts=True)
+            zipped_dict = dict(zip(values, counts))
+            label_width = max(len(label) for _, label in stage_mapping.items()) + 1
+            for _, label in stage_mapping.items():
+                print(
+                    f" - {label:<{label_width}}:"
+                    f" {zipped_dict[label] if label in zipped_dict else 0:4d}"
+                )
+        else:
+            raise Exception(f"Mode {mode} is not supported!!")
+
     return {
-        "test_loss": loss,
+        "test_loss": test_loss,
+        "threshold": best_threshold,
         "accuracy": accuracy,
         "precision": precision,
         "recall": recall,
@@ -241,6 +331,9 @@ def test(
 
 
 if __name__ == "__main__":
+    mode = MODE
+    print(f"Mode: {mode}")
+
     device = torch.device(
         torch.accelerator.current_accelerator().type
         if torch.accelerator.is_available()
@@ -248,14 +341,19 @@ if __name__ == "__main__":
     )
     print(f"Device: {device}")
 
-    model = Net()
+    if mode == "binary":
+        model = Net(n_classes=1)
+    else:
+        model = Net()
+
     model.to(device)
 
     trainloader, valloader, class_weights = load_data(
         0,
         batch_size=32,
-        alpha_s=1.0,
-        alpha_l=-1.0,
+        alpha_s=0.0,
+        alpha_l=0.0,
+        mode=mode,
     )
 
     train(
@@ -267,6 +365,7 @@ if __name__ == "__main__":
         class_weights=class_weights,
         gamma=0.0,
         device=device,
+        mode=mode,
         testloader=valloader,
         # checkpoint=30,
     )

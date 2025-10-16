@@ -7,7 +7,7 @@ from torch.types import Device
 from torch.utils.data import ConcatDataset, DataLoader
 
 from fedlab.data.dreamt import DREAMTDataset
-from fedlab.task import Net, test
+from fedlab.task import MODE, Net, test
 from fedlab.utils.plot import LivePlot
 
 
@@ -18,6 +18,7 @@ def evaluate(
     device: Device = "cpu",
     history_file: str = None,
     dir_path="model",
+    mode="multiclass",
 ):
     model_path = os.path.join(dir_path, model_file)
 
@@ -40,12 +41,19 @@ def evaluate(
             epochs=history["round"],
             train_losses=history["train_loss"],
             test_losses=history["test_loss"],
-            accuracies=history["accuracy"],
+            metrics=history["accuracy"] if mode == "multiclass" else history["auc"],
+            metric_name="Accuracy" if mode == "multiclass" else "AUC",
         )
         plotter.show()
 
     model.load_state_dict(checkpoint["model_state"])
-    metrics = test(model, eval_dataloader, device, True)
+    metrics = test(
+        net=model,
+        testloader=eval_dataloader,
+        device=device,
+        plot=True,
+        mode=mode,
+    )
 
     print("\nResults:")
     key_width = max(len(k) for k in metrics) + 1
@@ -54,8 +62,11 @@ def evaluate(
 
 
 if __name__ == "__main__":
-    # participants = [0]
-    participants = [i for i in range(20)]
+    participants = [0]
+    # participants = [i for i in range(20)]
+
+    mode = MODE
+    print(f"Mode: {mode}")
 
     device = torch.device(
         torch.accelerator.current_accelerator().type
@@ -64,10 +75,14 @@ if __name__ == "__main__":
     )
     print(f"Device: {device}\n")
 
-    net = Net()
+    if mode == "binary":
+        net = Net(n_classes=1)
+    else:
+        net = Net()
+
     datasets = ConcatDataset(
         [
-            DREAMTDataset(participant, test=True, transform=from_numpy)
+            DREAMTDataset(participant, test=True, transform=from_numpy, mode=mode)
             for participant in participants
         ]
     )
@@ -83,4 +98,5 @@ if __name__ == "__main__":
         history_file="model_history.csv",
         eval_dataloader=dataloader,
         device=device,
+        mode=mode,
     )
