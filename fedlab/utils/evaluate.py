@@ -62,8 +62,8 @@ def evaluate(
 
 
 if __name__ == "__main__":
-    participants = [0]
-    # participants = [i for i in range(20)]
+    # participants = [0]
+    participants = [i for i in range(20)]
 
     mode = MODE
     print(f"Mode: {mode}")

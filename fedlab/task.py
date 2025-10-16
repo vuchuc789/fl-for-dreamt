@@ -235,7 +235,7 @@ def test(
         fpr, tpr, thresholds = roc_curve(all_labels, all_probs)
         J_scores = tpr - fpr
         best_idx = np.argmax(J_scores)
-        best_threshold = thresholds[best_idx]
+        best_threshold = thresholds[best_idx].item()
         all_preds = (all_probs >= best_threshold).astype(int)
     elif mode == "multiclass":
         best_threshold = 0.0  # no threshold for multi-class classification
@@ -243,7 +243,7 @@ def test(
     else:
         raise Exception(f"Mode {mode} is not supported!!")
 
-    accuracy = (all_preds == all_labels).mean()
+    accuracy = (all_preds == all_labels).mean().item()
     precision = precision_score(
         all_labels,
         all_preds,
@@ -301,6 +301,7 @@ def test(
                 confusion_matrix=cm, display_labels=SLEEP_STAGES
             )
             disp.plot(cmap=plt.cm.Blues)
+            plt.title("Confusion Matrix")
             plt.show()
         elif mode == "binary":
             stage_mapping = {0: "Sleep", 1: "Wake"}
@@ -316,6 +317,32 @@ def test(
                     f" - {label:<{label_width}}:"
                     f" {zipped_dict[label] if label in zipped_dict else 0:4d}"
                 )
+            cm = confusion_matrix(
+                raw_labels, raw_preds, labels=list(stage_mapping.values())
+            )
+            disp = ConfusionMatrixDisplay(
+                confusion_matrix=cm, display_labels=list(stage_mapping.values())
+            )
+            disp.plot(cmap=plt.cm.Blues)
+            plt.title("Confusion Matrix")
+            plt.show()
+
+            plt.figure(figsize=(6, 4))
+            plt.plot(fpr, tpr, label=f"ROC Curve (AUC = {auc:.4f})")
+            plt.plot([0, 1], [0, 1], "k--", label="Random Classifier")
+            plt.scatter(
+                fpr[best_idx],
+                tpr[best_idx],
+                color="red",
+                label=f"Threshold ({best_threshold:.4f})",
+                zorder=5,
+            )
+            plt.xlabel("False Positive Rate")
+            plt.ylabel("True Positive Rate")
+            plt.title("ROC Curve")
+            plt.legend(loc="lower right")
+            plt.grid(True)
+            plt.show()
         else:
             raise Exception(f"Mode {mode} is not supported!!")
 

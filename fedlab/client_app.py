@@ -12,8 +12,14 @@ app = ClientApp()
 
 @app.train()
 def train(msg: Message, context: Context):
+    mode = msg.content["config"]["mode"]
+
+    if mode == "binary":
+        model = Net(n_classes=1)
+    else:
+        model = Net()
+
     # Load the model and initialize it with the received weights
-    model = Net()
     model.load_state_dict(msg.content["arrays"].to_torch_state_dict())
     device = torch.device(
         torch.accelerator.current_accelerator().type
@@ -25,18 +31,25 @@ def train(msg: Message, context: Context):
     # Load the data
     partition_id = context.node_config["partition-id"]
     # num_partitions = context.node_config["num-partitions"]
-    trainloader, _, class_weights = load_data(partition_id, batch_size=32)
+    trainloader, _, class_weights = load_data(
+        partition_id,
+        batch_size=32,
+        alpha_s=0.0,
+        alpha_l=0.0,
+        mode=mode,
+    )
 
     # Call the training function
     metrics = train_fn(
         net=model,
         trainloader=trainloader,
-        epochs=context.run_config["local-epochs"],
-        lr=context.run_config["lr"],
-        weight_decay=context.run_config["weight-decay"],
+        epochs=msg.content["config"]["local-epochs"],
+        lr=msg.content["config"]["lr"],
+        weight_decay=msg.content["config"]["weight-decay"],
         device=device,
         class_weights=class_weights,
         proximal_mu=msg.content["config"]["proximal-mu"],
+        mode=mode,
     )
 
     # Construct and return reply Message
@@ -51,8 +64,14 @@ def train(msg: Message, context: Context):
 
 @app.evaluate()
 def evaluate(msg: Message, context: Context):
+    mode = msg.content["config"]["mode"]
+
+    if mode == "binary":
+        model = Net(n_classes=1)
+    else:
+        model = Net()
+
     # Load the model and initialize it with the received weights
-    model = Net()
     model.load_state_dict(msg.content["arrays"].to_torch_state_dict())
     device = torch.device(
         torch.accelerator.current_accelerator().type
@@ -64,13 +83,14 @@ def evaluate(msg: Message, context: Context):
     # Load the data
     partition_id = context.node_config["partition-id"]
     # num_partitions = context.node_config["num-partitions"]
-    _, valloader, _ = load_data(partition_id, batch_size=32)
+    _, valloader, _ = load_data(partition_id, batch_size=32, mode=mode)
 
     # Call the evaluation function
     metrics = test_fn(
         net=model,
         testloader=valloader,
         device=device,
+        mode=mode,
     )
 
     # Construct and return reply Message

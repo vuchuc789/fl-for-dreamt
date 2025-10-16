@@ -3,6 +3,7 @@ from typing import Callable, Optional
 
 from flwr.app import (
     ArrayRecord,
+    ConfigRecord,
     Context,
     Message,
     MetricRecord,
@@ -11,7 +12,7 @@ from flwr.app import (
 from flwr.serverapp import Grid, ServerApp
 from flwr.serverapp.strategy import FedProx
 
-from fedlab.task import Net
+from fedlab.task import MODE, Net
 from fedlab.utils.model import load_checkpoint, save_history, save_model
 
 
@@ -91,9 +92,18 @@ def main(grid: Grid, context: Context) -> None:
     fraction_evaluate: float = context.run_config["fraction-evaluate"]
     num_rounds: int = context.run_config["num-server-rounds"]
     proximal_mu: int = context.run_config["proximal-mu"]
+    local_epochs: int = context.run_config["local-epochs"]
+    lr: float = context.run_config["lr"]
+    weight_decay: float = context.run_config["weight-decay"]
+
+    mode = MODE
 
     # Load global model
-    global_model = Net()
+    if mode == "binary":
+        global_model = Net(n_classes=1)
+    else:
+        global_model = Net()
+
     checkpoint, _ = load_checkpoint(global_model)
     arrays = ArrayRecord(global_model.state_dict())
 
@@ -110,4 +120,17 @@ def main(grid: Grid, context: Context) -> None:
         grid=grid,
         initial_arrays=arrays,
         num_rounds=num_rounds,
+        train_config=ConfigRecord(
+            {
+                "mode": mode,
+                "local-epochs": local_epochs,
+                "lr": lr,
+                "weight-decay": weight_decay,
+            }
+        ),
+        evaluate_config=ConfigRecord(
+            {
+                "mode": mode,
+            }
+        ),
     )
